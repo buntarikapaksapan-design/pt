@@ -1425,8 +1425,8 @@ function enterLobby(code){
         state._questionStarted = true;
         const needsQ = myResult.needsQuestion === true || myResult.needsQuestion === 'true';
         if(state.isHost){
-          // Host ไม่ตอบคำถาม — แค่รอแล้ว push reveal
-          showWaitingForQuestion();
+          // Host เห็นคำถามแต่กดไม่ได้ + เห็น progress ของผู้เล่น
+          showHostQuestionView(qData, robberType, room);
           if(!state._hostRevealStarted){
             state._hostRevealStarted = true;
             waitAndReveal();
@@ -1436,6 +1436,9 @@ function enterLobby(code){
         } else {
           showWaitingForQuestion();
         }
+      } else if(state.isHost){
+        // listener fire อีกครั้ง — update progress ผู้เล่น
+        updateHostQuestionProgress(room);
       }
     }
 
@@ -1675,13 +1678,100 @@ async function choosePile(pileNum){
 
 function updateChoiceIndicators(choices){
   const container = document.getElementById('choice-indicators');
-  container.innerHTML = Object.entries(state.players)
-    .filter(([pid,p])=>!p.eliminated)
-    .map(([pid,p])=>`
+  const nonHostPlayers = Object.entries(state.players).filter(([pid,p])=>!p.eliminated && !p.isHost);
+  if(state.isHost){
+    // Host เห็นชัดว่าใครเลือกกองอะไร
+    container.innerHTML = nonHostPlayers.map(([pid,p])=>{
+      const chosen = choices[pid];
+      return `<div style="display:flex;align-items:center;gap:6px;padding:6px 12px;background:${chosen!==undefined?'rgba(240,192,64,0.15)':'rgba(255,255,255,0.04)'};border:1px solid ${chosen!==undefined?'var(--accent-gold)':'var(--border)'};border-radius:20px;font-size:0.85rem;font-weight:${chosen!==undefined?'700':'400'};color:${chosen!==undefined?'var(--accent-gold)':'var(--text-dim)'}">
+        <span>${p.avatar}</span>
+        <span>${p.name}</span>
+        ${chosen!==undefined ? `<span>→ กอง ${chosen}</span>` : '<span style="opacity:0.5">รอ...</span>'}
+      </div>`;
+    }).join('');
+  } else {
+    container.innerHTML = nonHostPlayers.map(([pid,p])=>`
       <div class="choice-dot ${choices[pid]!==undefined?'chosen':''}">
         <span style="font-size:0.9rem">${p.avatar}</span>
       </div>
     `).join('');
+  }
+}
+
+function showHostQuestionView(qData, robberType, room){
+  if(!qData || qData.length === 0) return;
+  const rt = ROBBER_TYPE[robberType] || ROBBER_TYPE.petty;
+  const badgeBg = rt.badge==='boss'?'rgba(155,89,182,0.2)':rt.badge==='gang'?'rgba(255,100,0,0.2)':'rgba(232,69,69,0.15)';
+  const badgeColor = rt.badge==='boss'?'var(--accent-purple)':rt.badge==='gang'?'#ff6400':'var(--accent-red)';
+
+  // แสดงคำถามทั้งหมด (gang=4, boss=5, petty=1)
+  const questionsHTML = qData.map((q,i)=>{
+    const adj = q.adj;
+    return `<div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:12px 14px;margin-bottom:8px">
+      <div style="font-size:0.75rem;color:var(--text-dim);margin-bottom:4px">ข้อที่ ${i+1}</div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div>
+          <div style="font-family:'Noto Sans JP',sans-serif;font-size:1.4rem;font-weight:900;color:var(--accent-gold)">${adj.word}</div>
+          <div style="font-family:'Noto Sans JP',sans-serif;font-size:0.85rem;color:var(--accent-gold);opacity:0.8">${adj.reading}</div>
+        </div>
+        <div style="color:var(--text-dim);font-size:0.8rem">→</div>
+        <div style="font-family:'Noto Sans JP',sans-serif;font-size:1rem;font-weight:700;color:var(--accent-green)">${q.correct}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('screen-question').innerHTML = `
+    <div class="panel question-panel slide-up" style="max-height:90vh;overflow-y:auto">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <span style="background:${badgeBg};color:${badgeColor};border:1px solid ${badgeColor};padding:4px 12px;border-radius:20px;font-size:0.8rem;font-weight:700">${rt.emoji} ${rt.name}</span>
+        <span style="font-size:0.8rem;color:var(--text-dim)">📋 Host — ดูเท่านั้น</span>
+      </div>
+
+      <div style="margin-bottom:14px">${questionsHTML}</div>
+
+      <div style="color:var(--text-dim);font-size:0.8rem;margin-bottom:8px">ความคืบหน้าผู้เล่น</div>
+      <div id="host-player-progress" style="display:flex;flex-direction:column;gap:6px">
+        ${buildHostProgressRows(room)}
+      </div>
+    </div>
+  `;
+  showScreen('screen-question');
+}
+
+function buildHostProgressRows(room){
+  const pileResults = room.pileResults || {};
+  const answers = room.answers || {};
+  const nonHost = Object.entries(state.players).filter(([pid,p])=>!p.eliminated && !p.isHost);
+  return nonHost.map(([pid,p])=>{
+    const pr = pileResults[pid];
+    const ans = answers[pid];
+    const needsQ = pr?.needsQuestion === true || pr?.needsQuestion === 'true';
+    let status, statusColor;
+    if(ans?.done){
+      const rawA = ans.answers || {};
+      const list = Array.isArray(rawA) ? rawA : Object.values(rawA);
+      const correct = list.filter(a=>a&&a.correct).length;
+      const total = list.length;
+      status = `✅ ตอบแล้ว ${correct}/${total} ถูก`;
+      statusColor = correct===total?'var(--accent-green)':'var(--accent-gold)';
+    } else if(needsQ){
+      status = '⏳ กำลังตอบ...';
+      statusColor = 'var(--text-dim)';
+    } else {
+      status = '💰 ได้ถุงเงิน';
+      statusColor = 'var(--accent-green)';
+    }
+    return `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:rgba(255,255,255,0.04);border-radius:8px">
+      <span style="font-size:1.1rem">${p.avatar}</span>
+      <span style="flex:1;font-weight:600;font-size:0.9rem">${p.name}</span>
+      <span style="font-size:0.85rem;color:${statusColor}">${status}</span>
+    </div>`;
+  }).join('');
+}
+
+function updateHostQuestionProgress(room){
+  const el = document.getElementById('host-player-progress');
+  if(el) el.innerHTML = buildHostProgressRows(room);
 }
 
 function showWaitingForQuestion(){
@@ -2475,47 +2565,68 @@ function showResult(resultData, pileResults, pileChoices){
 
   // Host — แสดงหน้าสรุปคะแนนทุกคน
   if(state.isHost){
-    const allPlayers = Object.values(state.players).sort((a,b)=>b.money-a.money);
-    document.getElementById('screen-result').innerHTML = `
-      <div class="panel result-panel slide-up" style="max-height:90vh;overflow-y:auto">
-        <div style="text-align:center;margin-bottom:16px">
-          <div style="font-size:2rem;margin-bottom:4px">📋</div>
-          <div style="font-size:1.3rem;font-weight:900;color:var(--accent-gold)">สรุปรอบที่ ${state.round}</div>
-          <div style="font-size:0.8rem;color:var(--text-dim);margin-top:4px">${isRobberRound ? '⚠️ รอบโจร' : '🌿 รอบปกติ'}</div>
-        </div>
+    const allPlayers = Object.entries(state.players)
+      .filter(([pid,p])=>!p.isHost)
+      .sort(([,a],[,b])=>b.money-a.money);
 
-        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">
-          ${allPlayers.map((p,i)=>{
-            const pd = Object.values(perPlayer||{}).find(x=>x.name===p.name);
-            const money = pd?.moneyChange||0;
-            const sign = money>=0?'+':'';
-            const color = money>0?'var(--accent-green)':money<0?'var(--accent-red)':'var(--text-dim)';
-            const borderColor = money>0?'var(--accent-green)':money<0?'var(--accent-red)':'var(--border)';
-            return `<div style="display:grid;grid-template-columns:1.5rem 1.8rem 1fr auto auto;align-items:center;gap:8px;padding:12px 14px;background:rgba(255,255,255,0.04);border-radius:10px;border-left:3px solid ${borderColor};${p.eliminated?'opacity:0.45':''}">
-              <span style="font-size:0.95rem;text-align:center">${p.eliminated?'💀':['🥇','🥈','🥉'][i]||'🏅'}</span>
-              <span style="font-size:1.2rem">${p.avatar}</span>
-              <div>
-                <div style="font-weight:700;font-size:0.95rem">${p.name}</div>
-                <div style="font-size:0.78rem;color:var(--text-dim)">${heartsDisplay(p.hearts||0)}</div>
-              </div>
-              <div style="text-align:right">
-                <div style="font-weight:900;color:${color};font-size:1rem">${sign}${money.toLocaleString()}฿</div>
-                <div style="font-size:0.78rem;color:var(--text-dim)">${pd ? 'กอง '+pd.pile : '—'}</div>
-              </div>
-              <div style="text-align:right;min-width:80px">
-                <div style="font-weight:700;color:var(--accent-gold);font-size:0.95rem">${(p.money||0).toLocaleString()}฿</div>
-                <div style="font-size:0.75rem;color:var(--text-dim)">รวม</div>
-              </div>
-            </div>`;
-          }).join('')}
-        </div>
+    // ดึง qaLog จาก Firebase มาแสดงข้อผิด
+    get(ref(db,'rooms/'+state.roomCode)).then(snap=>{
+      const room2 = snap.exists() ? snap.val() : {};
+      const qaLog = room2.qaLogRound || [];
 
-        <button id="result-next-btn" class="btn btn-gold" style="width:100%;margin-top:4px" onclick="resultNextRound()">
-          ${state.round >= 10 ? '📊 สรุปวัน →' : 'รอบถัดไป →'}
-        </button>
-      </div>
-    `;
-    showScreen('screen-result');
+      document.getElementById('screen-result').innerHTML = `
+        <div class="panel result-panel slide-up" style="max-height:90vh;overflow-y:auto">
+          <div style="text-align:center;margin-bottom:16px">
+            <div style="font-size:2rem;margin-bottom:4px">📋</div>
+            <div style="font-size:1.3rem;font-weight:900;color:var(--accent-gold)">สรุปรอบที่ ${state.round}</div>
+            <div style="font-size:0.8rem;color:var(--text-dim);margin-top:4px">${isRobberRound ? '⚠️ รอบโจร' : '🌿 รอบปกติ'}</div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+            ${allPlayers.map(([pid,p],i)=>{
+              const pd = perPlayer?.[pid];
+              const money = pd?.moneyChange||0;
+              const sign = money>=0?'+':'';
+              const color = money>0?'var(--accent-green)':money<0?'var(--accent-red)':'var(--text-dim)';
+              const borderColor = money>0?'var(--accent-green)':money<0?'var(--accent-red)':'var(--border)';
+
+              // ข้อผิดของผู้เล่นคนนี้
+              const myWrongs = qaLog.filter(q=>q.pid===pid && !q.correct);
+              const wrongHTML = myWrongs.length > 0
+                ? `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">
+                    ${myWrongs.map(q=>`<span style="font-family:'Noto Sans JP',sans-serif;font-size:0.78rem;background:rgba(232,69,69,0.15);border:1px solid rgba(232,69,69,0.3);border-radius:6px;padding:2px 8px;color:#ff8080">❌ ${q.word} → ${q.correct_ans}</span>`).join('')}
+                  </div>`
+                : pd ? `<div style="margin-top:4px;font-size:0.78rem;color:var(--accent-green)">✅ ไม่มีข้อผิด</div>` : '';
+
+              return `<div style="padding:12px 14px;background:rgba(255,255,255,0.04);border-radius:10px;border-left:3px solid ${borderColor};${p.eliminated?'opacity:0.45':''}">
+                <div style="display:grid;grid-template-columns:1.5rem 1.8rem 1fr auto auto;align-items:center;gap:8px">
+                  <span style="font-size:0.95rem;text-align:center">${p.eliminated?'💀':['🥇','🥈','🥉'][i]||'🏅'}</span>
+                  <span style="font-size:1.2rem">${p.avatar}</span>
+                  <div>
+                    <div style="font-weight:700;font-size:0.95rem">${p.name}</div>
+                    <div style="font-size:0.78rem;color:var(--text-dim)">${heartsDisplay(p.hearts||0)}</div>
+                  </div>
+                  <div style="text-align:right">
+                    <div style="font-weight:900;color:${color};font-size:1rem">${sign}${money.toLocaleString()}฿</div>
+                    <div style="font-size:0.78rem;color:var(--text-dim)">${pd ? 'กอง '+pd.pile : '—'}</div>
+                  </div>
+                  <div style="text-align:right;min-width:80px">
+                    <div style="font-weight:700;color:var(--accent-gold);font-size:0.95rem">${(p.money||0).toLocaleString()}฿</div>
+                    <div style="font-size:0.75rem;color:var(--text-dim)">รวม</div>
+                  </div>
+                </div>
+                ${wrongHTML}
+              </div>`;
+            }).join('')}
+          </div>
+
+          <button id="result-next-btn" class="btn btn-gold" style="width:100%;margin-top:4px" onclick="resultNextRound()">
+            ${state.round >= 10 ? '📊 สรุปวัน →' : 'รอบถัดไป →'}
+          </button>
+        </div>
+      `;
+      showScreen('screen-result');
+    });
     return;
   }
 
